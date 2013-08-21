@@ -1,0 +1,200 @@
+<?php
+
+/**
+ * @file sis_code_fill.module
+ * query google to fill sis code based on user name
+ * query prepared json data with scraped ufal staff details
+ */
+
+/**
+ * Implements hook_menu().
+ *
+ * Sets up calls to autocomplete callbacks
+ *
+ */
+function sis_code_fill_menu() {
+	$items = array();
+	$items['sis_code_fill/user_autocomplete_callback'] = array(
+		'page callback' => 'sis_code_fill_user_autocomplete_callback',
+		'access callback' => TRUE,
+	);
+	return $items;
+}
+
+/**
+ *
+ * @param $string
+ *   The string that will be searched.
+ */
+function sis_code_fill_user_autocomplete_callback($string = '') {
+	$matches = array();
+	if ($string && strlen($string) > 2) {
+		$staff_names = &drupal_static(__FUNCTION__);
+		
+		if (!isset($staff_info)) {
+			$json = file_get_contents(drupal_get_path('module', 'sis_code_fill') . '/' . 'people.json');
+			$staff_info_php = json_decode($json);
+			$staff_names = array_keys(get_object_vars($staff_info_php));
+		}
+		$names = preg_grep("/$string/i", $staff_names);
+		$matches = array_combine($names, $names);
+	}
+
+	drupal_json_output($matches);
+}
+
+function sis_code_fill_form_alter(&$form, &$form_state, $form_id) {
+	if (preg_match('/^(personal_profile_node_form)$/', $form_id)) {
+		// attach the ajax autocomplete
+		$form['title']['#autocomplete_path'] = 'sis_code_fill/user_autocomplete_callback';
+		
+		// attach the ajax values prefiller
+		$form['title']['#ajax'] = array(
+			'callback' => 'sis_code_form_callback',
+			'wrapper'  => 'sis_code_replace_div',
+		);
+		$form['#prefix'] = '<div id="sis_code_replace_div">';
+		$form['#suffix'] = '</div>';
+		
+		if (!empty($form_state['values'])) {
+			$username   = $form_state['values']['title'];
+			$staff_info = sis_code_get_staff_info($username);
+			
+			$textfields = array(
+				'name_with_degrees' => 'field_name_with_degrees',
+				'old_url'           => 'field_old_web_address',
+				'Telefon'           => 'field_work_phone',
+				'Fax'               => 'field_work_fax',
+				'E-mail'            => 'field_email2',
+			);
+			foreach ($textfields as $index => $destination) {
+				// DO NOT Check if we got info && destination is empty so far
+				//if (isset($staff_info->$index) && empty($form_state['values'][$destination]['und'][0]['value'])) {
+				if (isset($staff_info->$index)) {
+					$value = $staff_info->$index;
+					if ($index === 'Telefon' || $index === 'Fax') {
+						$value = preg_replace('/\s+/', '', $value);
+						$value = number_format($value, 0, '.', ' ');
+					}
+					if ($destination === 'field_email2') {
+						$value = strtolower($value);
+						$form[$destination]['und'][0]['email']['#value'] = $value;
+					} else {
+						$form[$destination]['und'][0]['value']['#value'] = $value;
+					}
+				}
+			}
+			if (isset($staff_info->{'Sis code'})) {
+				$form['field_sis_id']['und'][0]['value']['#value'] = $staff_info->{'Sis code'};
+			} else {
+				$sis_code   = sis_code_get_sis_code($username);
+				$form['field_sis_id']['und'][0]['value']['#value'] = $sis_code;
+			}
+			if (isset($staff_info->position)) {
+				// find out the position id
+				$options = $form['field_position']['und']['#options'];
+				foreach ($options as $id => $label) {
+					if ($label === $staff_info->position) {
+						// have to wait till select gets available there
+						$form['field_position']['#pre_render'] = array('sis_code_select_pre_render');
+						// tmp store it in default value, pick it up in the prerender
+						$form['field_position']['und']['#default_value'][0] = $id;
+						break;
+					}
+				}
+			}
+			if (isset($staff_info->{'Místnost / budova'})) {
+					// find out the position id
+					$options = $form['field_room_number']['und']['#options'];
+					$value = $staff_info->{'Místnost / budova'};
+					$value = preg_replace("/[  ]+/", '', $value);
+					if (preg_match('/S(\d+)/', $value, $matches)) {
+						$value = $matches[1];
+					}
+					
+					$found = 0;
+					foreach ($options as $id => $label) {
+						if ($label === $value) {
+							// have to wait till select gets available there
+							$form['field_room_number']['#pre_render'] = array('sis_code_select_pre_render');
+							// tmp store it in default value, pick it up in the prerender
+							$form['field_room_number']['und']['#default_value'][0] = $id;
+							$found = 1;
+							break;
+						}
+					}
+					if (!$found) {
+						$form['field_room_number']['#pre_render'] = array('sis_code_other_pre_render');
+						// tmp store it in default value, pick it up in the prerender
+						$form['field_room_number']['und']['#default_value'][0] = $value;
+					}
+			}
+		}
+	}
+}
+
+function sis_code_select_pre_render($element) {
+	// tmp stored, picking up here
+	$element['und']['select']['#value'] = array($element['und']['#default_value'][0]);
+	return $element;
+}
+function sis_code_other_pre_render($element) {
+	// tmp stored, picking up here
+	$element['und']['select']['#value'] = 'select_or_other';
+	$element['und']['other']['#value'] = array($element['und']['#default_value'][0]);
+	return $element;
+}
+
+function sis_code_form_callback($form, &$form_state) {
+	return $form;
+}
+
+function sis_code_get_sis_code_google($user_name) {
+	$query = urlencode($user_name .' site:http://is.cuni.cz/studium/predmety/');
+	$url = "http://ajax.googleapis.com/ajax/services/search/web?v=1.0&q=".$query;
+	$body = file_get_contents($url);
+	$json = json_decode($body);
+	$res = array_shift($json->responseData->results);
+	
+	if (preg_match('/kod=([\d]+)/', $res->unescapedUrl, $matches)) {
+		return $matches[1];
+	}
+	return;
+}
+
+function sis_code_get_sis_code($user_name) {
+	@list($firstname, $secondname) = explode(' ', $user_name);
+	if (!isset($firstname) || !isset($secondname)) return;
+	$firstname  = urlencode($firstname);
+	$secondname = urlencode($secondname);
+	
+	// try teacher
+	$url = "https://is.cuni.cz/studium/kdojekdo/index.php?do=hledani&koho=u&fakulta=&prijmeni=$secondname&jmeno=$firstname&inukat=1&exukat=&vyhledej=Vyhledej";
+	$body = file_get_contents($url);
+	
+	if (preg_match('/kdojekdo\/index.php\?do=detailuc&amp;kuc=([\d]+)/', $body, $matches)) {
+		return $matches[1];
+	}
+	// try student
+	/*
+	$url = "https://is.cuni.cz/studium/kdojekdo/index.php?do=hledani&koho=s&fakulta=11320&prijmeni=$secondname&jmeno=$firstname&login=&sidos=&sustav=&sdruh=&r_zacatek=Z&pocet=50&vyhledej=Vyhledej";
+	$body = file_get_contents($url);
+	
+	if (preg_match('/kdojekdo\/index.php\?do=detailuc&amp;si=([\d]+)/', $body, $matches)) {
+		return $matches[1];
+	}
+	*/
+	
+	return;
+}
+
+function sis_code_get_staff_info($user_name) {
+	$staff_info = &drupal_static(__FUNCTION__);
+	
+	if (!isset($staff_info)) {
+		$json = file_get_contents(drupal_get_path('module', 'sis_code_fill') . '/' . 'people.json');
+		$staff_info = json_decode($json);
+	}
+	
+	return @$staff_info->$user_name;
+}

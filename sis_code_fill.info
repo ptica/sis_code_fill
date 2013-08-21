@@ -1,0 +1,5 @@
+name = Sis code autofiller
+description = query google to fill sis code based on user name
+package = Ufal
+core = 7.x
+
