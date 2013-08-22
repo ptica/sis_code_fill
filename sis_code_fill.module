@@ -56,7 +56,7 @@ function sis_code_fill_form_alter(&$form, &$form_state, $form_id) {
 		$form['#prefix'] = '<div id="sis_code_replace_div">';
 		$form['#suffix'] = '</div>';
 		
-		if (!empty($form_state['values'])) {
+		if (!empty($form_state['values']['title'])) {
 			$username   = $form_state['values']['title'];
 			$staff_info = sis_code_get_staff_info($username);
 			
