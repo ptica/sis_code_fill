@@ -72,9 +72,12 @@ function sis_code_fill_form_alter(&$form, &$form_state, $form_id) {
 				//if (isset($staff_info->$index) && empty($form_state['values'][$destination]['und'][0]['value'])) {
 				if (isset($staff_info->$index)) {
 					$value = $staff_info->$index;
-					if ($index === 'Telefon' || $index === 'Fax') {
+					if ($index === 'Telefon') {
 						$value = preg_replace('/\s+/', '', $value);
-						$value = number_format($value, 0, '.', ' ');
+						$value = '+420 ' . number_format($value, 0, '.', ' ');
+					}
+					if ($index === 'Fax') {
+						$value = '+420 257 223 293';
 					}
 					if ($destination === 'field_email2') {
 						$value = strtolower($value);
